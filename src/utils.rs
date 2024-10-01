@@ -84,7 +84,7 @@ pub(crate) struct StaticState {
     pub(crate) ldk_announced_node_name: [u8; 32],
     pub(crate) network: Network,
     pub(crate) storage_dir_path: PathBuf,
-    pub(crate) ldk_data_dir: PathBuf,
+    pub(crate) ldk_data_dir: ColorSource,
     pub(crate) logger: Arc<FilesystemLogger>,
     pub(crate) indexer_url: String,
     pub(crate) proxy_endpoint: String,
