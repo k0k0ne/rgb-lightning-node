@@ -444,9 +444,9 @@ pub(crate) type OutputSweeper = ldk_sweep::OutputSweeper<
     Arc<RgbOutputSpender>,
 >;
 
-fn _update_rgb_channel_amount(ldk_data_dir: &Path, payment_hash: &PaymentHash, receiver: bool) {
+fn _update_rgb_channel_amount(color_source: &Path, payment_hash: &PaymentHash, receiver: bool) {
     let payment_hash_str = hex_str(&payment_hash.0);
-    for entry in fs::read_dir(ldk_data_dir).unwrap() {
+    for entry in fs::read_dir(color_source).unwrap() {
         let file = entry.unwrap();
         let file_name = file.file_name();
         let file_name_str = file_name.to_string_lossy();
@@ -466,7 +466,7 @@ fn _update_rgb_channel_amount(ldk_data_dir: &Path, payment_hash: &PaymentHash, r
             } else {
                 (rgb_payment_info.amount, 0)
             };
-            update_rgb_channel_amount(&channel_id_str, offered, received, ldk_data_dir, false);
+            update_rgb_channel_amount(&channel_id_str, offered, received, color_source, false);
             break;
         }
     }
@@ -500,12 +500,12 @@ async fn handle_ldk_events(
 
             let is_colored = is_channel_rgb(
                 &temporary_channel_id,
-                &PathBuf::from(&static_state.ldk_data_dir),
+                &PathBuf::from(&static_state.color_source),
             );
             let (unsigned_psbt, asset_id, recipient_id) = if is_colored {
                 let (rgb_info, _) = get_rgb_channel_info_pending(
                     &temporary_channel_id,
-                    &PathBuf::from(&static_state.ldk_data_dir),
+                    &PathBuf::from(&static_state.color_source),
                 );
 
                 let channel_rgb_amount: u64 = rgb_info.local_rgb_amount;
@@ -548,7 +548,7 @@ async fn handle_ldk_events(
             let funding_txid = funding_tx.txid().to_string();
 
             let psbt_path = static_state
-                .ldk_data_dir
+                .color_source
                 .join(format!("psbt_{funding_txid}"));
             fs::write(psbt_path, psbt.to_string()).unwrap();
 
@@ -663,7 +663,7 @@ async fn handle_ldk_events(
                 PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
             };
 
-            _update_rgb_channel_amount(&static_state.ldk_data_dir, &payment_hash, true);
+            static_state.color_source.lock().unwrap().update_rgb_channel_amount(&payment_hash, true);
 
             if unlocked_state.is_maker_swap(&payment_hash) {
                 unlocked_state.update_maker_swap_status(&payment_hash, SwapStatus::Succeeded);
@@ -684,7 +684,7 @@ async fn handle_ldk_events(
             payment_id,
             ..
         } => {
-            _update_rgb_channel_amount(&static_state.ldk_data_dir, &payment_hash, false);
+            static_state.color_source.lock().unwrap().update_rgb_channel_amount(&payment_hash, false);
 
             if unlocked_state.is_maker_swap(&payment_hash) {
                 tracing::info!(
@@ -798,7 +798,7 @@ async fn handle_ldk_events(
                     &next_channel_id_str,
                     outbound_amount_forwarded_rgb,
                     0,
-                    &static_state.ldk_data_dir,
+                    &static_state.color_source,
                     false,
                 );
             }
@@ -807,7 +807,7 @@ async fn handle_ldk_events(
                     &prev_channel_id_str,
                     0,
                     inbound_amount_forwarded_rgb,
-                    &static_state.ldk_data_dir,
+                    &static_state.color_source,
                     false,
                 );
             }
@@ -920,7 +920,7 @@ async fn handle_ldk_events(
 
             let funding_txid = funding_txo.txid.to_string();
             let psbt_path = static_state
-                .ldk_data_dir
+                .color_source
                 .join(format!("psbt_{funding_txid}"));
 
             if psbt_path.exists() {
@@ -929,7 +929,7 @@ async fn handle_ldk_events(
                 let state_copy = unlocked_state.clone();
                 let psbt_str_copy = psbt_str.clone();
                 let _txid = tokio::task::spawn_blocking(move || {
-                    if is_channel_rgb(&channel_id, &PathBuf::from(&static_state.ldk_data_dir)) {
+                    if is_channel_rgb(&channel_id, &PathBuf::from(&static_state.color_source)) {
                         state_copy.rgb_send_end(psbt_str_copy).unwrap().txid
                     } else {
                         state_copy.rgb_send_btc_end(psbt_str_copy).unwrap()
@@ -942,7 +942,7 @@ async fn handle_ldk_events(
             } else {
                 // acceptor
                 let consignment_path = static_state
-                    .ldk_data_dir
+                    .color_source
                     .join(format!("consignment_{funding_txid}"));
                 if !consignment_path.exists() {
                     return;
@@ -1042,7 +1042,7 @@ async fn handle_ldk_events(
             let get_rgb_info = |channel_id| {
                 get_rgb_channel_info_optional(
                     channel_id,
-                    &PathBuf::from(&static_state.ldk_data_dir),
+                    &PathBuf::from(&static_state.color_source),
                     true,
                 )
                 .map(|(rgb_info, _)| {
@@ -1198,7 +1198,7 @@ impl OutputSpender for RgbOutputSpender {
 
             let transfer_info_path = self
                 .static_state
-                .ldk_data_dir
+                .color_source
                 .join(format!("{txid_str}_transfer_info"));
             if !transfer_info_path.exists() {
                 continue;
@@ -1331,7 +1331,7 @@ impl OutputSpender for RgbOutputSpender {
 
             let consignment_path = self
                 .static_state
-                .ldk_data_dir
+                .color_source
                 .join(format!("consignment_{}", closing_txid.clone()));
             consignment
                 .save_file(&consignment_path)
@@ -1374,8 +1374,8 @@ pub(crate) async fn start_ldk(
     let static_state = &app_state.static_state;
 
     let bitcoind_client = static_state.bitcoind_client.clone();
-    let ldk_data_dir = static_state.ldk_data_dir.clone();
-    let ldk_data_dir_path = PathBuf::from(&ldk_data_dir);
+    let color_source = static_state.color_source.clone();
+    let color_source_path = PathBuf::from(&color_source);
     let logger = static_state.logger.clone();
     let network = static_state.network;
     let ldk_peer_listening_port = static_state.ldk_peer_listening_port;
@@ -1413,18 +1413,18 @@ pub(crate) async fn start_ldk(
         &ldk_seed,
         cur.as_secs(),
         cur.subsec_nanos(),
-        ldk_data_dir_path.clone(),
+        color_source_path.clone(),
     ));
 
     // Initialize Persistence
-    let fs_store = Arc::new(FilesystemStore::new(ldk_data_dir.clone()));
+    let fs_store = Arc::new(FilesystemStore::new(color_source.clone()));
     let persister = Arc::new(MonitorUpdatingPersister::new(
         Arc::clone(&fs_store),
         Arc::clone(&logger),
         1000,
         Arc::clone(&keys_manager),
         Arc::clone(&keys_manager),
-        ldk_data_dir_path.clone(),
+        color_source_path.clone(),
     ));
 
     // Initialize the ChainMonitor
@@ -1447,14 +1447,14 @@ pub(crate) async fn start_ldk(
         .expect("Failed to fetch best block header and best block");
 
     // Initialize routing ProbabilisticScorer
-    let network_graph_path = ldk_data_dir.join("network_graph");
+    let network_graph_path = color_source.join("network_graph");
     let network_graph = Arc::new(disk::read_network(
         &network_graph_path,
         network,
         logger.clone(),
     ));
 
-    let scorer_path = ldk_data_dir.join("scorer");
+    let scorer_path = color_source.join("scorer");
     let scorer = Arc::new(RwLock::new(disk::read_scorer(
         &scorer_path,
         Arc::clone(&network_graph),
@@ -1482,7 +1482,7 @@ pub(crate) async fn start_ldk(
     user_config.manually_accept_inbound_channels = true;
     let mut restarting_node = true;
     let (channel_manager_blockhash, channel_manager) = {
-        if let Ok(mut f) = fs::File::open(ldk_data_dir.join("manager")) {
+        if let Ok(mut f) = fs::File::open(color_source.join("manager")) {
             let mut channel_monitor_mut_references = Vec::new();
             for (_, channel_monitor) in channelmonitors.iter_mut() {
                 channel_monitor_mut_references.push(channel_monitor);
@@ -1498,7 +1498,7 @@ pub(crate) async fn start_ldk(
                 logger.clone(),
                 user_config,
                 channel_monitor_mut_references,
-                ldk_data_dir_path.clone(),
+                color_source_path.clone(),
             );
             <(BlockHash, ChannelManager)>::read(&mut f, read_args).unwrap()
         } else {
@@ -1523,7 +1523,7 @@ pub(crate) async fn start_ldk(
                 user_config,
                 chain_params,
                 cur.as_secs() as u32,
-                ldk_data_dir_path.clone(),
+                color_source_path.clone(),
             );
             (polled_best_block_hash, fresh_channel_manager)
         }
@@ -1575,7 +1575,7 @@ pub(crate) async fn start_ldk(
 
     // Initialize the OutputSweeper.
     let txes = Arc::new(Mutex::new(disk::read_output_spender_txes(
-        &ldk_data_dir.join(OUTPUT_SPENDER_TXES),
+        &color_source.join(OUTPUT_SPENDER_TXES),
     )));
     let rgb_output_spender = Arc::new(RgbOutputSpender {
         static_state: static_state.clone(),
@@ -1778,10 +1778,10 @@ pub(crate) async fn start_ldk(
     });
 
     let inbound_payments = Arc::new(Mutex::new(disk::read_inbound_payment_info(
-        &ldk_data_dir.join(INBOUND_PAYMENTS_FNAME),
+        &color_source.join(INBOUND_PAYMENTS_FNAME),
     )));
     let outbound_payments = Arc::new(Mutex::new(disk::read_outbound_payment_info(
-        &ldk_data_dir.join(OUTBOUND_PAYMENTS_FNAME),
+        &color_source.join(OUTBOUND_PAYMENTS_FNAME),
     )));
 
     let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
@@ -1792,19 +1792,19 @@ pub(crate) async fn start_ldk(
     ));
 
     // Persist ChannelManager and NetworkGraph
-    let persister = Arc::new(FilesystemStore::new(ldk_data_dir_path.clone()));
+    let persister = Arc::new(FilesystemStore::new(color_source_path.clone()));
 
     // Read swaps info
     let maker_swaps = Arc::new(Mutex::new(disk::read_swaps_info(
-        &ldk_data_dir.join(MAKER_SWAPS_FNAME),
+        &color_source.join(MAKER_SWAPS_FNAME),
     )));
     let taker_swaps = Arc::new(Mutex::new(disk::read_swaps_info(
-        &ldk_data_dir.join(TAKER_SWAPS_FNAME),
+        &color_source.join(TAKER_SWAPS_FNAME),
     )));
 
     // Read channel IDs info
     let channel_ids_map = Arc::new(Mutex::new(disk::read_channel_ids_info(
-        &ldk_data_dir.join(CHANNEL_IDS_FNAME),
+        &color_source.join(CHANNEL_IDS_FNAME),
     )));
 
     let unlocked_state = Arc::new(UnlockedAppState {
@@ -1882,7 +1882,7 @@ pub(crate) async fn start_ldk(
     // Regularly reconnect to channel peers.
     let connect_cm = Arc::clone(&channel_manager);
     let connect_pm = Arc::clone(&peer_manager);
-    let peer_data_path = ldk_data_dir.join(CHANNEL_PEER_DATA);
+    let peer_data_path = color_source.join(CHANNEL_PEER_DATA);
     let stop_connect = Arc::clone(&stop_processing);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));

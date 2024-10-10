@@ -1031,18 +1031,12 @@ pub(crate) async fn asset_balance(
     let mut offchain_outbound = 0;
     let mut offchain_inbound = 0;
     for chan_info in unlocked_state.channel_manager.list_channels() {
-        let info_file_path = get_rgb_channel_info_path(
-            &chan_info.channel_id.0.as_hex().to_string(),
-            &state.static_state.ldk_data_dir,
-            false,
-        );
-        if !info_file_path.exists() {
-            continue;
-        }
-        let rgb_info = parse_rgb_channel_info(&info_file_path);
-        if rgb_info.contract_id == contract_id {
-            offchain_outbound += rgb_info.local_rgb_amount;
-            offchain_inbound += rgb_info.remote_rgb_amount;
+        let rgb_info = state.static_state.color_source.lock().unwrap().get_rgb_channel_info(&chan_info.channel_id, false);
+        if let Some(rgb_info) = rgb_info {
+            if rgb_info.contract_id == contract_id {
+                offchain_outbound += rgb_info.local_rgb_amount;
+                offchain_inbound += rgb_info.remote_rgb_amount;
+            }
         }
     }
 
@@ -1528,14 +1522,18 @@ pub(crate) async fn keysend(
                 let contract_id = ContractId::from_str(&asset_id)
                     .map_err(|_| APIError::InvalidAssetID(asset_id))?;
 
-                write_rgb_payment_info_file(
-                    &PathBuf::from(&state.static_state.ldk_data_dir),
-                    &payment_hash,
+                let rgb_payment_info = RgbPaymentInfo {
                     contract_id,
-                    rgb_amount,
-                    false,
-                    false,
-                );
+                    amount: rgb_amount,
+                    local_rgb_amount: 0,
+                    remote_rgb_amount: 0,
+                    swap_payment: false,
+                    inbound: false,
+                };
+
+                let is_pending = true;
+                state.static_state.color_source.lock().unwrap().save_rgb_payment_info(None, &payment_hash, is_pending, rgb_payment_info);
+
                 Some((contract_id, rgb_amount))
             }
             (None, None) => None,
