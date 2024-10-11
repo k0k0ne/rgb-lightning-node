@@ -6,10 +6,11 @@ use bitcoin::key::XOnlyPublicKey;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::{Network, OutPoint, Transaction, TxOut, WPubkeyHash};
 use hex::DisplayHex;
+use lightning::color_ext::ColorSourceWrapper;
 use lightning::events::bump_transaction::{Utxo, WalletSource};
 use lightning::ln::ChannelId;
 use lightning::rgb_utils::{
-    get_rgb_channel_info_path, is_channel_rgb, parse_rgb_channel_info, RgbInfo,
+    RgbInfo,
 };
 use lightning::sign::ChangeDestinationSource;
 use rgb_lib::{
@@ -614,14 +615,11 @@ impl WalletSource for RgbLibWalletWrapper {
 
 pub(crate) fn get_rgb_channel_info_optional(
     channel_id: &ChannelId,
-    ldk_data_dir: &Path,
+    color_source: &ColorSourceWrapper,
     pending: bool,
-) -> Option<(RgbInfo, PathBuf)> {
-    if !is_channel_rgb(channel_id, ldk_data_dir) {
-        return None;
-    }
-    let info_file_path =
-        get_rgb_channel_info_path(&channel_id.0.as_hex().to_string(), ldk_data_dir, pending);
-    let rgb_info = parse_rgb_channel_info(&info_file_path);
-    Some((rgb_info, info_file_path))
+) -> (Option<RgbInfo>, lightning::color_ext::database::RgbInfoKey) {
+    color_source
+        .lock()
+        .unwrap()
+        .get_rgb_channel_info(channel_id, pending)
 }

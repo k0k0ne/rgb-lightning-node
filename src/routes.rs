@@ -9,13 +9,12 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Network, ScriptBuf};
 use hex::DisplayHex;
-use lightning::impl_writeable_tlv_based_enum;
+use lightning::{color_ext::database::RgbInfoKey, impl_writeable_tlv_based_enum};
 use lightning::ln::ChannelId;
 use lightning::offers::offer::{self, Offer};
 use lightning::onion_message::messenger::Destination;
 use lightning::rgb_utils::{
-    get_rgb_channel_info_path, get_rgb_payment_info_path, parse_rgb_channel_info,
-    parse_rgb_payment_info, STATIC_BLINDING,
+    STATIC_BLINDING,
 };
 use lightning::routing::gossip::RoutingFees;
 use lightning::routing::router::{Path as LnPath, Route, RouteHint, RouteHintHop};
@@ -1174,7 +1173,7 @@ pub(crate) async fn connect_peer(
             connect_peer_if_necessary(peer_pubkey, peer_addr, unlocked_state.peer_manager.clone())
                 .await?;
             disk::persist_channel_peer(
-                &state.static_state.ldk_data_dir.join(CHANNEL_PEER_DATA),
+                &state.static_state.color_source.join(CHANNEL_PEER_DATA),
                 &peer_pubkey,
                 &peer_addr,
             )?;
@@ -1281,7 +1280,7 @@ pub(crate) async fn disconnect_peer(
         }
 
         disk::delete_channel_peer(
-            &state.static_state.ldk_data_dir.join(CHANNEL_PEER_DATA),
+            &state.static_state.color_source.join(CHANNEL_PEER_DATA),
             payload.peer_pubkey,
         )?;
 
@@ -1657,13 +1656,13 @@ pub(crate) async fn list_channels(
             channel.short_channel_id = Some(id);
         }
 
-        let info_file_path = get_rgb_channel_info_path(
-            &chan_info.channel_id.0.as_hex().to_string(),
-            &state.static_state.ldk_data_dir,
-            false,
-        );
-        if info_file_path.exists() {
-            let rgb_info = parse_rgb_channel_info(&info_file_path);
+        // let info_file_path = get_rgb_channel_info_path(
+        //     &chan_info.channel_id.0.as_hex().to_string(),
+        //     &state.static_state.color_source,
+        //     false,
+        // );
+        let (rgb_info, _) = state.static_state.color_source.lock().unwrap().get_rgb_channel_info(&chan_info.channel_id, false);
+        if let Some(rgb_info) = rgb_info {
             channel.asset_id = Some(rgb_info.contract_id.to_string());
             channel.asset_local_amount = Some(rgb_info.local_rgb_amount);
             channel.asset_remote_amount = Some(rgb_info.remote_rgb_amount);
@@ -1685,11 +1684,12 @@ pub(crate) async fn list_payments(
     let mut payments = vec![];
 
     for (payment_hash, payment_info) in &inbound_payments {
-        let rgb_payment_info_path_inbound =
-            get_rgb_payment_info_path(payment_hash, &state.static_state.ldk_data_dir, true);
+        // let rgb_payment_info_path_inbound =
+        //     get_rgb_payment_info_path(payment_hash, &state.static_state.color_source, true);
+        
+        let info = state.static_state.color_source.lock().unwrap().get_rgb_payment_info(payment_hash, true);
 
-        let (asset_amount, asset_id) = if rgb_payment_info_path_inbound.exists() {
-            let info = parse_rgb_payment_info(&rgb_payment_info_path_inbound);
+        let (asset_amount, asset_id) = if let Some(info) = info {
             (Some(info.amount), Some(info.contract_id.to_string()))
         } else {
             (None, None)
@@ -1708,11 +1708,9 @@ pub(crate) async fn list_payments(
     for (payment_id, payment_info) in &outbound_payments {
         let payment_hash = &PaymentHash(payment_id.0);
 
-        let rgb_payment_info_path_outbound =
-            get_rgb_payment_info_path(payment_hash, &state.static_state.ldk_data_dir, false);
+        let info = state.static_state.color_source.lock().unwrap().get_rgb_payment_info(payment_hash, false);
 
-        let (asset_amount, asset_id) = if rgb_payment_info_path_outbound.exists() {
-            let info = parse_rgb_payment_info(&rgb_payment_info_path_outbound);
+        let (asset_amount, asset_id) = if let Some(info) = info {
             (Some(info.amount), Some(info.contract_id.to_string()))
         } else {
             (None, None)
@@ -2026,7 +2024,7 @@ pub(crate) async fn maker_execute(
             .filter(|details| {
                 match get_rgb_channel_info_optional(
                     &details.channel_id,
-                    &state.static_state.ldk_data_dir,
+                    &state.static_state.color_source,
                     false,
                 ) {
                     _ if swap_info.is_from_btc() => true,
@@ -2161,7 +2159,7 @@ pub(crate) async fn maker_execute(
 
         if swap_info.is_to_asset() {
             write_rgb_payment_info_file(
-                &state.static_state.ldk_data_dir,
+                &state.static_state.color_source,
                 &swapstring.payment_hash,
                 swap_info.to_asset.unwrap(),
                 swap_info.qty_to,
@@ -2248,7 +2246,7 @@ pub(crate) async fn maker_init(
         if let Some(to_asset) = to_asset {
             let max_balance = get_max_local_rgb_amount(
                 to_asset,
-                &state.static_state.ldk_data_dir,
+                &state.static_state.color_source,
                 unlocked_state.channel_manager.list_channels().iter(),
             );
             if swap_info.qty_to > max_balance {
@@ -2367,7 +2365,7 @@ pub(crate) async fn open_channel(
         let (peer_pubkey, mut peer_addr) =
             parse_peer_info(payload.peer_pubkey_and_opt_addr.to_string())?;
 
-        let peer_data_path = state.static_state.ldk_data_dir.join(CHANNEL_PEER_DATA);
+        let peer_data_path = state.static_state.color_source.join(CHANNEL_PEER_DATA);
         if peer_addr.is_none() {
             if let Some(peer) = unlocked_state.peer_manager.peer_by_node_id(&peer_pubkey) {
                 if let Some(socket_address) = peer.socket_address {
@@ -2494,22 +2492,32 @@ pub(crate) async fn open_channel(
                 local_rgb_amount: *asset_amount,
                 remote_rgb_amount: 0,
             };
-            write_rgb_channel_info(
-                &get_rgb_channel_info_path(
-                    &temporary_channel_id,
-                    &state.static_state.ldk_data_dir,
-                    true,
-                ),
-                &rgb_info,
-            );
-            write_rgb_channel_info(
-                &get_rgb_channel_info_path(
-                    &temporary_channel_id,
-                    &state.static_state.ldk_data_dir,
-                    false,
-                ),
-                &rgb_info,
-            );
+            state.static_state.color_source
+                .lock()
+                .unwrap()
+                .save_rgb_channel_info(&RgbInfoKey::new(temporary_channel_id.clone(), true), &rgb_info);
+
+            // write_rgb_channel_info(
+            //     &get_rgb_channel_info_path(
+            //         &temporary_channel_id,
+            //         &state.static_state.color_source,
+            //         true,
+            //     ),
+            //     &rgb_info,
+            // );
+            state.static_state.color_source
+                .lock()
+                .unwrap()
+                .save_rgb_channel_info(&RgbInfoKey::new(temporary_channel_id.clone(), false), &rgb_info);
+
+            // write_rgb_channel_info(
+            //     &get_rgb_channel_info_path(
+            //         &temporary_channel_id,
+            //         &state.static_state.color_source,
+            //         false,
+            //     ),
+            //     &rgb_info,
+            // );
         }
 
         Ok(Json(OpenChannelResponse {
@@ -2848,7 +2856,7 @@ pub(crate) async fn send_payment(
                         )));
                     }
                     write_rgb_payment_info_file(
-                        &PathBuf::from(&state.static_state.ldk_data_dir.clone()),
+                        &PathBuf::from(&state.static_state.color_source.clone()),
                         &payment_hash,
                         rgb_contract_id,
                         rgb_amount,
@@ -2962,7 +2970,7 @@ pub(crate) async fn taker(
         if let Some(from_asset) = swapstring.swap_info.from_asset {
             let max_balance = get_max_local_rgb_amount(
                 from_asset,
-                &state.static_state.ldk_data_dir,
+                &state.static_state.color_source,
                 unlocked_state.channel_manager.list_channels().iter(),
             );
             if swapstring.swap_info.qty_from > max_balance {

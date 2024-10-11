@@ -1042,7 +1042,7 @@ async fn handle_ldk_events(
             let get_rgb_info = |channel_id| {
                 get_rgb_channel_info_optional(
                     channel_id,
-                    &PathBuf::from(&static_state.color_source),
+                    &static_state.color_source,
                     true,
                 )
                 .map(|(rgb_info, _)| {

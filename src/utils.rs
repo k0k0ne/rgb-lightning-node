@@ -84,7 +84,7 @@ pub(crate) struct StaticState {
     pub(crate) ldk_announced_node_name: [u8; 32],
     pub(crate) network: Network,
     pub(crate) storage_dir_path: PathBuf,
-    pub(crate) ldk_data_dir: ColorSource,
+    pub(crate) color_source: lightning::color_ext::ColorSourceWrapper,
     pub(crate) logger: Arc<FilesystemLogger>,
     pub(crate) indexer_url: String,
     pub(crate) proxy_endpoint: String,
@@ -340,9 +340,9 @@ pub(crate) fn parse_peer_info(
 }
 
 pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, AppError> {
-    // Initialize the Logger (creates ldk_data_dir and its logs directory)
-    let ldk_data_dir = args.storage_dir_path.join(LDK_DIR);
-    let logger = Arc::new(FilesystemLogger::new(ldk_data_dir.clone()));
+    // Initialize the Logger (creates color_source and its logs directory)
+    let color_source = args.storage_dir_path.join(LDK_DIR);
+    let logger = Arc::new(FilesystemLogger::new(color_source.clone()));
 
     // Initialize our bitcoind client.
     let bitcoind_client = match BitcoindClient::new(
@@ -400,7 +400,7 @@ pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, Ap
         ldk_announced_node_name: args.ldk_announced_node_name,
         network,
         storage_dir_path: args.storage_dir_path.clone(),
-        ldk_data_dir,
+        color_source,
         logger,
         indexer_url: indexer_url.to_string(),
         proxy_endpoint: proxy_endpoint.to_string(),
@@ -426,13 +426,13 @@ pub(crate) fn get_current_timestamp() -> u64 {
 
 pub(crate) fn get_max_local_rgb_amount<'r>(
     contract_id: ContractId,
-    ldk_data_dir_path: &Path,
+    color_source: &crate::color_ext::ColorSourceWrapper,
     channels: impl Iterator<Item = &'r ChannelDetails>,
 ) -> u64 {
     let mut max_balance = 0;
     for chan_info in channels {
         if let Some((rgb_info, _)) =
-            get_rgb_channel_info_optional(&chan_info.channel_id, ldk_data_dir_path, false)
+            get_rgb_channel_info_optional(&chan_info.channel_id, color_source, false)
         {
             if rgb_info.contract_id == contract_id && rgb_info.local_rgb_amount > max_balance {
                 max_balance = rgb_info.local_rgb_amount;
