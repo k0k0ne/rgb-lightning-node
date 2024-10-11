@@ -1361,7 +1361,6 @@ pub(crate) async fn start_ldk(
 
     let bitcoind_client = static_state.bitcoind_client.clone();
     let color_source = static_state.color_source.clone();
-    let color_source_path = PathBuf::from(&color_source);
     let logger = static_state.logger.clone();
     let network = static_state.network;
     let ldk_peer_listening_port = static_state.ldk_peer_listening_port;
@@ -1399,18 +1398,18 @@ pub(crate) async fn start_ldk(
         &ldk_seed,
         cur.as_secs(),
         cur.subsec_nanos(),
-        color_source_path.clone(),
+        color_source.clone(),
     ));
 
     // Initialize Persistence
-    let fs_store = Arc::new(FilesystemStore::new(color_source.clone()));
+    let fs_store = Arc::new(FilesystemStore::new(color_source.clone().lock().unwrap().ldk_data_dir()));
     let persister = Arc::new(MonitorUpdatingPersister::new(
         Arc::clone(&fs_store),
         Arc::clone(&logger),
         1000,
         Arc::clone(&keys_manager),
         Arc::clone(&keys_manager),
-        color_source_path.clone(),
+        color_source.clone(),
     ));
 
     // Initialize the ChainMonitor
@@ -1484,7 +1483,7 @@ pub(crate) async fn start_ldk(
                 logger.clone(),
                 user_config,
                 channel_monitor_mut_references,
-                color_source_path.clone(),
+                color_source.clone(),
             );
             <(BlockHash, ChannelManager)>::read(&mut f, read_args).unwrap()
         } else {
@@ -1509,7 +1508,7 @@ pub(crate) async fn start_ldk(
                 user_config,
                 chain_params,
                 cur.as_secs() as u32,
-                color_source_path.clone(),
+                color_source.clone(),
             );
             (polled_best_block_hash, fresh_channel_manager)
         }
@@ -1778,7 +1777,7 @@ pub(crate) async fn start_ldk(
     ));
 
     // Persist ChannelManager and NetworkGraph
-    let persister = Arc::new(FilesystemStore::new(color_source_path.clone()));
+    let persister = Arc::new(FilesystemStore::new(color_source.clone().lock().unwrap().ldk_data_dir()));
 
     // Read swaps info
     let maker_swaps = Arc::new(Mutex::new(disk::read_swaps_info(

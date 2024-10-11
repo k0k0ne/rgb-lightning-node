@@ -9,7 +9,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Network, ScriptBuf};
 use hex::DisplayHex;
-use lightning::{color_ext::database::RgbInfoKey, impl_writeable_tlv_based_enum};
+use lightning::{color_ext::{database::RgbInfoKey, ColorSource}, impl_writeable_tlv_based_enum, rgb_utils::RgbPaymentInfo};
 use lightning::ln::ChannelId;
 use lightning::offers::offer::{self, Offer};
 use lightning::onion_message::messenger::Destination;
@@ -25,7 +25,7 @@ use lightning::{
         channelmanager::{PaymentId, RecipientOnionFields, Retry},
         PaymentHash, PaymentPreimage,
     },
-    rgb_utils::{write_rgb_channel_info, write_rgb_payment_info_file, RgbInfo},
+    rgb_utils::{RgbInfo},
     routing::{
         gossip::NodeId,
         router::{PaymentParameters, RouteParameters},
@@ -1030,7 +1030,7 @@ pub(crate) async fn asset_balance(
     let mut offchain_outbound = 0;
     let mut offchain_inbound = 0;
     for chan_info in unlocked_state.channel_manager.list_channels() {
-        let rgb_info = state.static_state.color_source.lock().unwrap().get_rgb_channel_info(&chan_info.channel_id, false);
+        let (rgb_info, _) = state.static_state.color_source.lock().unwrap().get_rgb_channel_info(&chan_info.channel_id, false);
         if let Some(rgb_info) = rgb_info {
             if rgb_info.contract_id == contract_id {
                 offchain_outbound += rgb_info.local_rgb_amount;
@@ -1173,7 +1173,7 @@ pub(crate) async fn connect_peer(
             connect_peer_if_necessary(peer_pubkey, peer_addr, unlocked_state.peer_manager.clone())
                 .await?;
             disk::persist_channel_peer(
-                &state.static_state.color_source.join(CHANNEL_PEER_DATA),
+                &state.static_state.color_source.lock().unwrap().ldk_data_dir().join(CHANNEL_PEER_DATA),
                 &peer_pubkey,
                 &peer_addr,
             )?;
@@ -1280,7 +1280,7 @@ pub(crate) async fn disconnect_peer(
         }
 
         disk::delete_channel_peer(
-            &state.static_state.color_source.join(CHANNEL_PEER_DATA),
+            &state.static_state.color_source.lock().unwrap().ldk_data_dir().join(CHANNEL_PEER_DATA),
             payload.peer_pubkey,
         )?;
 
@@ -1531,7 +1531,12 @@ pub(crate) async fn keysend(
                 };
 
                 let is_pending = true;
-                state.static_state.color_source.lock().unwrap().save_rgb_payment_info(None, &payment_hash, is_pending, rgb_payment_info);
+                state.static_state.color_source.lock().unwrap().save_rgb_payment_info(
+                    None, 
+                    &payment_hash, 
+                    is_pending, 
+                    &rgb_payment_info
+                );
 
                 Some((contract_id, rgb_amount))
             }
@@ -2022,17 +2027,39 @@ pub(crate) async fn maker_execute(
             .list_usable_channels()
             .iter()
             .filter(|details| {
-                match get_rgb_channel_info_optional(
+                // match get_rgb_channel_info_optional(
+                //     &details.channel_id,
+                //     &state.static_state.color_source,
+                //     false,
+                // ) {
+                //     _ if swap_info.is_from_btc() => true,
+                //     (rgb_info, _) if let Some(rgb_info) = rgb_info => {
+                //         if Some(rgb_info.contract_id) == swap_info.from_asset => {
+                //             true
+                //         }
+                //         false
+                //     }
+                //     _ => false,
+                // }
+                if swap_info.is_from_btc() {
+                    return true;
+                } 
+                let (rgb_info, _) = get_rgb_channel_info_optional(
                     &details.channel_id,
                     &state.static_state.color_source,
                     false,
-                ) {
-                    _ if swap_info.is_from_btc() => true,
-                    Some((rgb_info, _)) if Some(rgb_info.contract_id) == swap_info.from_asset => {
+                );
+
+                return if let Some(rgb_info) = rgb_info {
+                    if Some(rgb_info.contract_id) == swap_info.from_asset {
                         true
+                    } else {
+                        false
                     }
-                    _ => false,
-                }
+                } else {
+                    false
+                };
+                
             })
             .map(|details| {
                 let config = details.counterparty.forwarding_info.as_ref().unwrap();
@@ -2158,14 +2185,28 @@ pub(crate) async fn maker_execute(
         };
 
         if swap_info.is_to_asset() {
-            write_rgb_payment_info_file(
-                &state.static_state.color_source,
+            let rgb_payment_info = RgbPaymentInfo {
+                contract_id: swap_info.to_asset.unwrap(),
+                amount: swap_info.qty_to,
+                local_rgb_amount: 0,
+                remote_rgb_amount: 0,
+                swap_payment: true,
+                inbound: false,
+            };
+            state.static_state.color_source.lock().unwrap().save_rgb_payment_info(
+                None,
                 &swapstring.payment_hash,
-                swap_info.to_asset.unwrap(),
-                swap_info.qty_to,
                 true,
-                false,
+                &rgb_payment_info
             );
+            // write_rgb_payment_info_file(
+            //     &state.static_state.color_source,
+            //     &swapstring.payment_hash,
+            //     swap_info.to_asset.unwrap(),
+            //     swap_info.qty_to,
+            //     true,
+            //     false,
+            // );
         }
 
         unlocked_state.update_maker_swap_status(&swapstring.payment_hash, SwapStatus::Pending);
@@ -2365,7 +2406,7 @@ pub(crate) async fn open_channel(
         let (peer_pubkey, mut peer_addr) =
             parse_peer_info(payload.peer_pubkey_and_opt_addr.to_string())?;
 
-        let peer_data_path = state.static_state.color_source.join(CHANNEL_PEER_DATA);
+        let peer_data_path = state.static_state.color_source.lock().unwrap().ldk_data_dir().join(CHANNEL_PEER_DATA);
         if peer_addr.is_none() {
             if let Some(peer) = unlocked_state.peer_manager.peer_by_node_id(&peer_pubkey) {
                 if let Some(socket_address) = peer.socket_address {
@@ -2483,7 +2524,7 @@ pub(crate) async fn open_channel(
                 tracing::debug!("RGB send lock set to false (open channel failure: {e:?})");
                 APIError::FailedOpenChannel(format!("{:?}", e))
             })?;
-        let temporary_channel_id = temporary_channel_id.0.as_hex().to_string();
+        let temporary_channel_id_str = temporary_channel_id.0.as_hex().to_string();
         tracing::info!("EVENT: initiated channel with peer {}", peer_pubkey);
 
         if let Some((contract_id, asset_amount)) = &colored_info {
@@ -2495,7 +2536,7 @@ pub(crate) async fn open_channel(
             state.static_state.color_source
                 .lock()
                 .unwrap()
-                .save_rgb_channel_info(&RgbInfoKey::new(temporary_channel_id.clone(), true), &rgb_info);
+                .save_rgb_channel_info(&RgbInfoKey::new(&temporary_channel_id, true), &rgb_info);
 
             // write_rgb_channel_info(
             //     &get_rgb_channel_info_path(
@@ -2508,7 +2549,7 @@ pub(crate) async fn open_channel(
             state.static_state.color_source
                 .lock()
                 .unwrap()
-                .save_rgb_channel_info(&RgbInfoKey::new(temporary_channel_id.clone(), false), &rgb_info);
+                .save_rgb_channel_info(&RgbInfoKey::new(&temporary_channel_id, false), &rgb_info);
 
             // write_rgb_channel_info(
             //     &get_rgb_channel_info_path(
@@ -2521,7 +2562,7 @@ pub(crate) async fn open_channel(
         }
 
         Ok(Json(OpenChannelResponse {
-            temporary_channel_id,
+            temporary_channel_id: temporary_channel_id_str,
         }))
     })
     .await
@@ -2855,14 +2896,28 @@ pub(crate) async fn send_payment(
                             "msat amount in invoice sending an RGB asset cannot be less than {INVOICE_MIN_MSAT}"
                         )));
                     }
-                    write_rgb_payment_info_file(
-                        &PathBuf::from(&state.static_state.color_source.clone()),
+                    let rgb_payment_info = RgbPaymentInfo {
+                        contract_id: rgb_contract_id,
+                        amount: rgb_amount,
+                        local_rgb_amount: 0,
+                        remote_rgb_amount: 0,
+                        swap_payment: false,
+                        inbound: false,
+                    };
+                    state.static_state.color_source.lock().unwrap().save_rgb_payment_info(
+                        None,
                         &payment_hash,
-                        rgb_contract_id,
-                        rgb_amount,
-                        false,
-                        false,
+                        true,
+                        &rgb_payment_info
                     );
+                    // write_rgb_payment_info_file(
+                    //     &PathBuf::from(&state.static_state.color_source.clone()),
+                    //     &payment_hash,
+                    //     rgb_contract_id,
+                    //     rgb_amount,
+                    //     false,
+                    //     false,
+                    // );
                 },
                 (None, None) => {}
                 (Some(_), None) => {
