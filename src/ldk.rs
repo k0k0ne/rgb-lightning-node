@@ -1,4 +1,5 @@
 use amplify::map;
+use bitcoin::bip32::ExtendedPubKey;
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::network::constants::Network;
 use bitcoin::psbt::Psbt;
@@ -1355,7 +1356,6 @@ impl OutputSpender for RgbOutputSpender {
 
 pub(crate) async fn start_ldk(
     app_state: Arc<AppState>,
-    mnemonic: Mnemonic,
 ) -> Result<(LdkBackgroundServices, Arc<UnlockedAppState>), APIError> {
     let static_state = &app_state.static_state;
 
@@ -1364,7 +1364,7 @@ pub(crate) async fn start_ldk(
     let logger = static_state.logger.clone();
     let network = static_state.network;
     let ldk_peer_listening_port = static_state.ldk_peer_listening_port;
-    let ldk_announced_listen_addr = static_state.ldk_announced_listen_addr.clone();
+    let ldk_announced_listen_addr: Vec<lightning::ln::msgs::SocketAddress> = static_state.ldk_announced_listen_addr.clone();
     let ldk_announced_node_name = static_state.ldk_announced_node_name;
     let indexer_url = static_state.indexer_url.clone();
 
@@ -1380,22 +1380,16 @@ pub(crate) async fn start_ldk(
     // Initialize the KeysManager
     // The key seed that we use to derive the node privkey (that corresponds to the node pubkey) and
     // other secret key material.
-    let xkey: ExtendedKey = mnemonic
-        .clone()
-        .into_extended_key()
-        .expect("a valid key should have been provided");
-    let master_xprv = &xkey
-        .into_xprv(network)
-        .expect("should be possible to get an extended private key");
+    let seed = static_state.key_seed.clone();
+    let master_xprv = crate::utils::xprv_from_seed(seed, network.into()).expect("valid master xprv");
     let xprv: ExtendedPrivKey = master_xprv
         .ckd_priv(&Secp256k1_30::new(), ChildNumber::Hardened { index: 535 })
         .unwrap();
-    let ldk_seed: [u8; 32] = xprv.private_key.secret_bytes();
     let cur = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
     let keys_manager = Arc::new(KeysManager::new(
-        &ldk_seed,
+        &seed,
         cur.as_secs(),
         cur.subsec_nanos(),
         color_source.clone(),
@@ -1515,14 +1509,16 @@ pub(crate) async fn start_ldk(
     };
 
     // Prepare the RGB wallet
-    let mnemonic_str = mnemonic.to_string();
     let bitcoin_network = network.into();
-    let account_xpub = get_account_xpub(bitcoin_network, &mnemonic_str).unwrap();
+    let xprv = crate::utils::xprv_from_seed(seed, network.into()).unwrap();
+    let xpub = ExtendedPubKey::from_priv(&Secp256k1::new(), &xprv);
+    let account_xpub = xpub;
     let data_dir = static_state
         .storage_dir_path
         .clone()
         .to_string_lossy()
         .to_string();
+    let mnemonic = Mnemonic::from_entropy(&seed).expect("valid mnemonic");
     let mut rgb_wallet = tokio::task::spawn_blocking(move || {
         RgbLibWallet::new(WalletData {
             data_dir,

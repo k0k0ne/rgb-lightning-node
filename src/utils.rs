@@ -1,7 +1,10 @@
 use amplify::s;
+use bitcoin::bip32::{ChildNumber, ExtendedPrivKey};
+use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use futures::Future;
+use lightning::color_ext::{ColorSourceImpl, ColorSourceWrapper};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::msgs::SocketAddress;
 use lightning::ln::ChannelId;
@@ -17,6 +20,7 @@ use lightning::{
 };
 use lightning_persister::fs_store::FilesystemStore;
 use magic_crypt::{new_magic_crypt, MagicCryptTrait};
+
 use rgb_lib::{bdk::keys::bip39::Mnemonic, BitcoinNetwork, ContractId};
 use std::{
     fmt::Write,
@@ -90,6 +94,7 @@ pub(crate) struct StaticState {
     pub(crate) proxy_endpoint: String,
     pub(crate) bitcoind_client: Arc<BitcoindClient>,
     pub(crate) max_media_upload_size_mb: u16,
+    pub key_seed: [u8; 32], // only for demo purposes
 }
 
 pub(crate) struct UnlockedAppState {
@@ -339,10 +344,24 @@ pub(crate) fn parse_peer_info(
     Ok((pubkey.unwrap(), peer_addr))
 }
 
+pub fn xprv_from_seed(seed: [u8; 32], network: BitcoinNetwork) -> Result<ExtendedPrivKey, bitcoin::bip32::Error> {
+    let master_xprv = ExtendedPrivKey::new_master(network.into(), &seed)?;
+    let account_derivation_path = vec![
+        ChildNumber::from_hardened_idx(86 as u32).unwrap(),
+        ChildNumber::from_hardened_idx(u32::from(network != BitcoinNetwork::Mainnet)).unwrap(),
+        ChildNumber::from_hardened_idx(0 as u32).unwrap(),
+    ];
+    Ok(master_xprv.derive_priv(&Secp256k1::new(), &account_derivation_path)?)
+}
+
 pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, AppError> {
     // Initialize the Logger (creates color_source and its logs directory)
-    let color_source = args.storage_dir_path.join(LDK_DIR);
-    let logger = Arc::new(FilesystemLogger::new(color_source.clone()));
+    let ldk_data_dir = args.storage_dir_path.join(LDK_DIR);
+    let network: BitcoinNetwork = BitcoinNetwork::Regtest;
+    let key_seed = [0u8; 32];
+    let xprv = xprv_from_seed(key_seed, network).unwrap();
+    let color_source = ColorSourceWrapper::new(Mutex::new(ColorSourceImpl::new(ldk_data_dir.clone(), network, xprv)));
+    let logger = Arc::new(FilesystemLogger::new(ldk_data_dir.clone()));
 
     // Initialize our bitcoind client.
     let bitcoind_client = match BitcoindClient::new(
@@ -406,6 +425,7 @@ pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, Ap
         proxy_endpoint: proxy_endpoint.to_string(),
         bitcoind_client,
         max_media_upload_size_mb: args.max_media_upload_size_mb,
+        key_seed,
     });
 
     Ok(Arc::new(AppState {
@@ -426,13 +446,13 @@ pub(crate) fn get_current_timestamp() -> u64 {
 
 pub(crate) fn get_max_local_rgb_amount<'r>(
     contract_id: ContractId,
-    color_source: &crate::color_ext::ColorSourceWrapper,
+    color_source: &lightning::color_ext::ColorSourceWrapper,
     channels: impl Iterator<Item = &'r ChannelDetails>,
 ) -> u64 {
     let mut max_balance = 0;
     for chan_info in channels {
-        if let Some((rgb_info, _)) =
-            get_rgb_channel_info_optional(&chan_info.channel_id, color_source, false)
+        let (rgb_info, _) = get_rgb_channel_info_optional(&chan_info.channel_id, color_source, false);
+        if let Some(rgb_info) = rgb_info
         {
             if rgb_info.contract_id == contract_id && rgb_info.local_rgb_amount > max_balance {
                 max_balance = rgb_info.local_rgb_amount;
