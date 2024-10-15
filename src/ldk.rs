@@ -87,8 +87,7 @@ use crate::rgb::{get_rgb_channel_info_optional, RgbLibWalletWrapper};
 use crate::routes::{HTLCStatus, SwapStatus, DUST_LIMIT_MSAT};
 use crate::swap::SwapData;
 use crate::utils::{
-    connect_peer_if_necessary, do_connect_peer, get_current_timestamp, hex_str, AppState,
-    StaticState, UnlockedAppState,
+    connect_peer_if_necessary, do_connect_peer, get_current_timestamp, get_mnemonic_path, hex_str, AppState, StaticState, UnlockedAppState
 };
 
 pub(crate) const FEE_RATE: f32 = 7.0;
@@ -1389,7 +1388,7 @@ pub(crate) async fn start_ldk(
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
     let keys_manager = Arc::new(KeysManager::new(
-        &seed,
+        &seed[0..32].try_into().expect("Slice with incorrect length"),
         cur.as_secs(),
         cur.subsec_nanos(),
         color_source.clone(),
@@ -1518,7 +1517,10 @@ pub(crate) async fn start_ldk(
         .clone()
         .to_string_lossy()
         .to_string();
-    let mnemonic = Mnemonic::from_entropy(&seed).expect("valid mnemonic");
+
+    let mnemonic_path = get_mnemonic_path(static_state.storage_dir_path.as_path());
+    let mnemonic = Mnemonic::from_str(&fs::read_to_string(mnemonic_path).expect("valid mnemonic path")).expect("valid mnemonic");
+
     let mut rgb_wallet = tokio::task::spawn_blocking(move || {
         RgbLibWallet::new(WalletData {
             data_dir,
@@ -1713,6 +1715,7 @@ pub(crate) async fn start_ldk(
 
     let peer_manager_connection_handler = peer_manager.clone();
     let listening_port = ldk_peer_listening_port;
+    println!("trying to bind to port: {}", ldk_peer_listening_port);
     let stop_processing = Arc::new(AtomicBool::new(false));
     let stop_listen = Arc::clone(&stop_processing);
     tokio::spawn(async move {

@@ -159,7 +159,7 @@ async fn start_node(
     }
     let node_address = start_daemon(node_test_dir, node_peer_port).await;
 
-    let password = format!("{node_test_dir}.{node_peer_port}");
+    let password = format!("");
 
     if !keep_node_dir {
         let payload = InitRequest {

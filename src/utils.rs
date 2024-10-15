@@ -21,6 +21,8 @@ use lightning::{
 use lightning_persister::fs_store::FilesystemStore;
 use magic_crypt::{new_magic_crypt, MagicCryptTrait};
 
+use rgb_lib::bdk::keys::GeneratableKey;
+use rgb_lib::generate_keys;
 use rgb_lib::{bdk::keys::bip39::Mnemonic, BitcoinNetwork, ContractId};
 use std::{
     fmt::Write,
@@ -94,7 +96,7 @@ pub(crate) struct StaticState {
     pub(crate) proxy_endpoint: String,
     pub(crate) bitcoind_client: Arc<BitcoindClient>,
     pub(crate) max_media_upload_size_mb: u16,
-    pub key_seed: [u8; 32], // only for demo purposes
+    pub key_seed: [u8; 64], // only for demo purposes
 }
 
 pub(crate) struct UnlockedAppState {
@@ -177,12 +179,13 @@ pub(crate) fn check_password_validity(
     storage_dir_path: &Path,
 ) -> Result<Mnemonic, APIError> {
     let mnemonic_path = get_mnemonic_path(storage_dir_path);
-    if let Ok(encrypted_mnemonic) = fs::read_to_string(mnemonic_path) {
-        let mcrypt = new_magic_crypt!(password, 256);
-        let mnemonic_str = mcrypt
-            .decrypt_base64_to_string(encrypted_mnemonic)
-            .map_err(|_| APIError::WrongPassword)?;
-        Ok(Mnemonic::from_str(&mnemonic_str).expect("valid mnemonic"))
+    if let Ok(mnemonic) = fs::read_to_string(mnemonic_path) {
+        Ok(Mnemonic::from_str(&mnemonic).expect("valid mnemonic"))
+        // let mcrypt = new_magic_crypt!(password, 256);
+        // let mnemonic_str = mcrypt
+        //     .decrypt_base64_to_string(encrypted_mnemonic)
+        //     .map_err(|_| APIError::WrongPassword)?;
+        // Ok(Mnemonic::from_str(&mnemonic_str).expect("valid mnemonic"))
     } else {
         Err(APIError::NotInitialized)
     }
@@ -344,7 +347,7 @@ pub(crate) fn parse_peer_info(
     Ok((pubkey.unwrap(), peer_addr))
 }
 
-pub fn xprv_from_seed(seed: [u8; 32], network: BitcoinNetwork) -> Result<ExtendedPrivKey, bitcoin::bip32::Error> {
+pub fn xprv_from_seed(seed: [u8; 64], network: BitcoinNetwork) -> Result<ExtendedPrivKey, bitcoin::bip32::Error> {
     let master_xprv = ExtendedPrivKey::new_master(network.into(), &seed)?;
     let account_derivation_path = vec![
         ChildNumber::from_hardened_idx(86 as u32).unwrap(),
@@ -358,7 +361,14 @@ pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, Ap
     // Initialize the Logger (creates color_source and its logs directory)
     let ldk_data_dir = args.storage_dir_path.join(LDK_DIR);
     let network: BitcoinNetwork = BitcoinNetwork::Regtest;
-    let key_seed = [0u8; 32];
+    let mnemonic_path = get_mnemonic_path(args.storage_dir_path.as_path());
+    
+    let keys = generate_keys(args.network.into());
+    fs::write(mnemonic_path, keys.mnemonic.clone()).expect("able to write");
+    let mnemonic = Mnemonic::from_str(&keys.mnemonic).unwrap();
+
+    println!("mnemonic: {}", mnemonic);
+    let key_seed: [u8; 64] = mnemonic.to_seed("");
     let xprv = xprv_from_seed(key_seed, network).unwrap();
     let color_source = ColorSourceWrapper::new(Mutex::new(ColorSourceImpl::new(ldk_data_dir.clone(), network, xprv)));
     let logger = Arc::new(FilesystemLogger::new(ldk_data_dir.clone()));

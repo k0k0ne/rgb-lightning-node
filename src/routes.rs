@@ -39,25 +39,16 @@ use lightning_invoice::payment::{
 use lightning_invoice::{utils::create_invoice_from_channelmanager, Currency};
 use lightning_invoice::{Bolt11Invoice, PaymentSecret};
 use rgb_lib::{
-    generate_keys,
-    utils::recipient_id_from_script_buf,
-    wallet::{
+    bdk::keys::bip39::Mnemonic, generate_keys, utils::recipient_id_from_script_buf, wallet::{
         AssetCFA as RgbLibAssetCFA, AssetIface as RgbLibAssetIface, AssetNIA as RgbLibAssetNIA,
         AssetUDA as RgbLibAssetUDA, Balance as RgbLibBalance, Invoice as RgbLibInvoice,
         Media as RgbLibMedia, Recipient, RecipientInfo, TokenLight as RgbLibTokenLight,
         WitnessData,
-    },
-    AssetSchema as RgbLibAssetSchema, BitcoinNetwork as RgbLibNetwork, ContractId,
-    Error as RgbLibError, RgbTransport,
+    }, AssetSchema as RgbLibAssetSchema, BitcoinNetwork as RgbLibNetwork, ContractId, Error as RgbLibError, RgbTransport
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    net::ToSocketAddrs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, SystemTime},
+    collections::HashMap, fs, net::ToSocketAddrs, path::{Path, PathBuf}, str::FromStr, sync::Arc, time::{Duration, SystemTime}
 };
 use tokio::{
     fs::File,
@@ -1096,9 +1087,9 @@ pub(crate) async fn change_password(
     WithRejection(Json(payload), _): WithRejection<Json<ChangePasswordRequest>, APIError>,
 ) -> Result<Json<EmptyResponse>, APIError> {
     no_cancel(async move {
-        let _unlocked_state = state.check_locked().await?;
+        let _unlocked_state: TokioMutexGuard<'_, Option<Arc<UnlockedAppState>>> = state.check_locked().await?;
 
-        check_password_strength(payload.new_password.clone())?;
+        // check_password_strength(payload.new_password.clone())?;
 
         let mnemonic =
             check_password_validity(&payload.old_password, &state.static_state.storage_dir_path)?;
@@ -1349,19 +1340,21 @@ pub(crate) async fn init(
 ) -> Result<Json<InitResponse>, APIError> {
     no_cancel(async move {
         let _unlocked_state = state.check_locked().await?;
+        let mnemonic_path = get_mnemonic_path(&state.static_state.storage_dir_path.as_path());
+        let mnemonic = Mnemonic::from_str(&fs::read_to_string(mnemonic_path).expect("valid mnemonic path")).expect("valid mnemonic");
+    
+        // check_password_strength(payload.password.clone())?;
 
-        check_password_strength(payload.password.clone())?;
+        // let mnemonic_path = get_mnemonic_path(&state.static_state.storage_dir_path);
+        // check_already_initialized(&mnemonic_path)?;
 
-        let mnemonic_path = get_mnemonic_path(&state.static_state.storage_dir_path);
-        check_already_initialized(&mnemonic_path)?;
+        // let keys = generate_keys(state.static_state.network.into());
 
-        let keys = generate_keys(state.static_state.network.into());
+        // let mnemonic = keys.mnemonic;
 
-        let mnemonic = keys.mnemonic;
+        // encrypt_and_save_mnemonic(payload.password, mnemonic.clone(), &mnemonic_path)?;
 
-        encrypt_and_save_mnemonic(payload.password, mnemonic.clone(), &mnemonic_path)?;
-
-        Ok(Json(InitResponse { mnemonic }))
+        Ok(Json(InitResponse { mnemonic: mnemonic.to_string() }))
     })
     .await
 }
