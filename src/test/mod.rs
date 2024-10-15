@@ -1020,12 +1020,15 @@ async fn open_channel_with_custom_data(
         .json::<OpenChannelResponse>()
         .await
         .unwrap();
-
+    println!("channel opened");
     let t_0 = OffsetDateTime::now_utc();
     let mut channel_id = None;
     let mut channel_funded = false;
+    println!("funding channel");
     while !channel_funded {
+        println!("checking channel funding status");
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        println!("checking channel funding status11");
         let channels = list_channels(node_address).await;
         if let Some(channel) = channels.iter().find(|c| {
             !c.ready
@@ -1052,6 +1055,7 @@ async fn open_channel_with_custom_data(
     let t_0 = OffsetDateTime::now_utc();
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        println!("checking channel status2");
         let channels = list_channels(node_address).await;
         let channel = channels
             .iter()
