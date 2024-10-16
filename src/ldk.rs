@@ -926,15 +926,20 @@ async fn handle_ldk_events(
 
                 *unlocked_state.rgb_send_lock.lock().unwrap() = false;
             } else {
+                let consignment_data = static_state
+                    .color_source.lock().unwrap().get_consignment_by_funding_txid(&funding_txo.txid).expect("channel should have a consignment");
+
                 // acceptor
-                let consignment_path = static_state
-                    .color_source.lock().unwrap().ldk_data_dir()
-                    .join(format!("consignment_{funding_txid}"));
-                if !consignment_path.exists() {
-                    return;
-                }
-                let consignment =
-                    RgbTransfer::load_file(consignment_path).expect("successful consignment load");
+                // let consignment_path = static_state
+                //     .color_source.lock().unwrap().ldk_data_dir()
+                //     .join(format!("consignment_{funding_txid}"));
+                // if !consignment_path.exists() {
+                //     println!("missing consignment file {}", consignment_path.to_str().unwrap());
+                //     return;
+                // }
+                // let consignment =
+                //     RgbTransfer::load_file(consignment_path).expect("successful consignment load");
+                let consignment = RgbTransfer::load(consignment_data).expect("valid consignment data");
                 let contract_id = consignment.contract_id();
                 let schema_id = consignment.schema_id().to_string();
                 let asset_schema = AssetSchema::from_schema_id(schema_id).unwrap();
@@ -1328,7 +1333,7 @@ impl OutputSpender for RgbOutputSpender {
                 .unwrap()
                 .endpoint;
             let rgb_wallet_wrapper_copy = self.rgb_wallet_wrapper.clone();
-            let closing_txid_copy = closing_txid.clone();
+            let closing_txid_copy: String = closing_txid.clone();
             let consignment_path_copy = consignment_path.clone();
             let res = futures::executor::block_on(tokio::task::spawn_blocking(move || {
                 println!("block_on posting consignment");
