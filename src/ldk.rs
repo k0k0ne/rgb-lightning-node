@@ -448,6 +448,7 @@ async fn handle_ldk_events(
     unlocked_state: Arc<UnlockedAppState>,
     static_state: Arc<StaticState>,
 ) {
+    tr!("Handling LDK event");
     match event {
         Event::FundingGenerationReady {
             temporary_channel_id,
@@ -1157,6 +1158,7 @@ impl OutputSpender for RgbOutputSpender {
         locktime: Option<LockTime>,
         secp_ctx: &Secp256k1<C>,
     ) -> Result<bitcoin::Transaction, ()> {
+        println!("debug: spend_spendable_outputs");
         let mut hasher = DefaultHasher::new();
         descriptors.hash(&mut hasher);
         let descriptors_hash = hasher.finish();
@@ -1329,6 +1331,7 @@ impl OutputSpender for RgbOutputSpender {
             let closing_txid_copy = closing_txid.clone();
             let consignment_path_copy = consignment_path.clone();
             let res = futures::executor::block_on(tokio::task::spawn_blocking(move || {
+                println!("block_on posting consignment");
                 rgb_wallet_wrapper_copy.post_consignment(
                     &proxy_url,
                     recipient_id,
@@ -1460,7 +1463,8 @@ pub(crate) async fn start_ldk(
     user_config.manually_accept_inbound_channels = true;
     let mut restarting_node = true;
     let (channel_manager_blockhash, channel_manager) = {
-        if let Ok(mut f) = fs::File::open(color_source.lock().unwrap().ldk_data_dir().join("manager")) {
+        let dir = color_source.lock().unwrap().ldk_data_dir();
+        if let Ok(mut f) = fs::File::open(dir.join("manager")) {
             let mut channel_monitor_mut_references = Vec::new();
             for (_, channel_monitor) in channelmonitors.iter_mut() {
                 channel_monitor_mut_references.push(channel_monitor);
@@ -1764,7 +1768,7 @@ pub(crate) async fn start_ldk(
     let inbound_payments = Arc::new(Mutex::new(disk::read_inbound_payment_info(
         &color_source.lock().unwrap().ldk_data_dir().join(INBOUND_PAYMENTS_FNAME),
     )));
-    let outbound_payments = Arc::new(Mutex::new(disk::read_outbound_payment_info(
+    let outbound_payments: Arc<Mutex<OutboundPaymentInfoStorage>> = Arc::new(Mutex::new(disk::read_outbound_payment_info(
         &color_source.lock().unwrap().ldk_data_dir().join(OUTBOUND_PAYMENTS_FNAME),
     )));
 

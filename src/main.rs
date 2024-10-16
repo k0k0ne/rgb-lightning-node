@@ -1,3 +1,14 @@
+/// for debugging purposes only
+macro_rules! tr {
+    ($($args: expr),*) => {
+        print!("{}:{}", file!(), line!());
+        $(
+            print!(", {}: {}", stringify!($args), $args);
+        )*
+        println!(""); // to get a new line at the end
+    }
+}
+
 mod args;
 mod backup;
 mod bitcoind;

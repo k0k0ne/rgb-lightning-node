@@ -664,6 +664,7 @@ async fn keysend(
     asset_amount: Option<u64>,
 ) -> Payment {
     let keysend = _keysend_raw(node_address, dest_pubkey, amt_msat, asset_id, asset_amount).await;
+    tr!();
     _wait_for_ln_payment(node_address, &keysend.payment_hash, HTLCStatus::Succeeded).await
 }
 
@@ -711,6 +712,7 @@ async fn list_assets(node_address: SocketAddr) -> ListAssetsResponse {
 }
 
 async fn list_channels(node_address: SocketAddr) -> Vec<Channel> {
+    tr!();
     println!("listing channels for node {node_address}");
     let res = reqwest::Client::new()
         .get(format!("http://{}/listchannels", node_address))
@@ -987,6 +989,9 @@ async fn open_channel_with_custom_data(
     fee_proportional_millionths: Option<u32>,
     temporary_channel_id: Option<&str>,
 ) -> Channel {
+    
+    tr!();
+
     println!(
         "opening channel with {asset_amount:?} of asset {asset_id:?} from node {node_address} \
               to {dest_peer_pubkey}"
@@ -1009,6 +1014,15 @@ async fn open_channel_with_custom_data(
         fee_proportional_millionths,
         temporary_channel_id: temporary_channel_id.map(|t| t.to_string()),
     };
+
+    tr!();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tr!();
+
+    tr!();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tr!();
+
     let res = reqwest::Client::new()
         .post(format!("http://{}/openchannel", node_address))
         .json(&payload)
@@ -1021,21 +1035,36 @@ async fn open_channel_with_custom_data(
         .await
         .unwrap();
     println!("channel opened");
+
+    tr!();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tr!();
+    tr!();
+
     let t_0 = OffsetDateTime::now_utc();
     let mut channel_id = None;
     let mut channel_funded = false;
     println!("funding channel");
+
+    tr!();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tr!();
+
     while !channel_funded {
-        println!("checking channel funding status");
+        tr!();
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        println!("checking channel funding status11");
+        tr!();
+        tr!();
+
         let channels = list_channels(node_address).await;
+        tr!();
         if let Some(channel) = channels.iter().find(|c| {
             !c.ready
                 && c.peer_pubkey == dest_peer_pubkey
                 && c.asset_id == asset_id.map(|id| id.to_string())
                 && c.asset_local_amount == asset_amount
         }) {
+            tr!();
             if channel.funding_txid.is_some() {
                 let txout = _get_txout(channel.funding_txid.as_ref().unwrap());
                 if !txout.is_empty() {
@@ -1051,17 +1080,20 @@ async fn open_channel_with_custom_data(
         }
     }
     let channel_id = channel_id.unwrap();
+    tr!();
 
     let t_0 = OffsetDateTime::now_utc();
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        println!("checking channel status2");
+        tr!();
+
         let channels = list_channels(node_address).await;
         let channel = channels
             .iter()
             .find(|c| c.channel_id == channel_id)
             .unwrap();
         if channel.ready {
+            tr!();
             return channel.clone();
         }
         if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > 10.0 {
