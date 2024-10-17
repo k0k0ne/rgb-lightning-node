@@ -3125,8 +3125,12 @@ pub(crate) async fn unlock(
         }
 
         tracing::debug!("Starting LDK...");
+        let mnemonic_path = get_mnemonic_path(&state.static_state.storage_dir_path.as_path());
+        let mnemonic =
+            Mnemonic::from_str(&fs::read_to_string(mnemonic_path).expect("valid mnemonic path"))
+                .expect("valid mnemonic");
         let (new_ldk_background_services, new_unlocked_app_state) =
-            match start_ldk(state.clone()).await {
+            match start_ldk(state.clone(), mnemonic).await {
                 Ok((nlbs, nuap)) => (nlbs, nuap),
                 Err(e) => {
                     state.update_changing_state(false);

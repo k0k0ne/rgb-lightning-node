@@ -2,7 +2,7 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use chrono::Utc;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringDecayParameters};
-use lightning::util::logger::{Logger, Record};
+use lightning::util::logger::{Level, Logger, Record};
 use lightning::util::ser::{Readable, ReadableArgs, Writer};
 use std::collections::HashMap;
 use std::fs;
@@ -88,6 +88,10 @@ impl ConsoleLogger {
 
 impl Logger for ConsoleLogger {
     fn log(&self, record: Record) {
+        if record.level < Level::Warn {
+            return;
+        }
+
         let _guard = self.lock.lock().unwrap();
         let raw_log = record.args.to_string();
 

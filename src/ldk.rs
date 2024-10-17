@@ -24,7 +24,7 @@ use lightning::routing::gossip::{NodeId, P2PGossipSync};
 use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringFeeParameters};
 use lightning::sign::{
-    EntropySource, InMemorySigner, KeysManager, OutputSpender, SpendableOutputDescriptor,
+    EntropySource, InMemorySigner, KeysManager, NodeSigner, OutputSpender, SpendableOutputDescriptor
 };
 use lightning::util::config::UserConfig;
 use lightning::util::persist::{
@@ -447,7 +447,7 @@ async fn handle_ldk_events(
     unlocked_state: Arc<UnlockedAppState>,
     static_state: Arc<StaticState>,
 ) {
-    tr!("Handling LDK event");
+    // println!("handle event: {:#?}", event);
     match event {
         Event::FundingGenerationReady {
             temporary_channel_id,
@@ -562,6 +562,8 @@ async fn handle_ldk_events(
                 if let Err(e) = res {
                     tracing::error!("cannot post consignment: {e}");
                     return;
+                } else {
+                    tracing::info!("posted consignment for channel {}", temporary_channel_id);
                 }
             }
 
@@ -1406,6 +1408,7 @@ impl OutputSpender for RgbOutputSpender {
 
 pub(crate) async fn start_ldk(
     app_state: Arc<AppState>,
+    mnemonic: Mnemonic,
 ) -> Result<(LdkBackgroundServices, Arc<UnlockedAppState>), APIError> {
     let static_state = &app_state.static_state;
 
@@ -1427,25 +1430,34 @@ pub(crate) async fn start_ldk(
     // BitcoindClient implements the BroadcasterInterface trait, so it'll act as our transaction
     // broadcaster.
     let broadcaster = bitcoind_client.clone();
-
     // Initialize the KeysManager
     // The key seed that we use to derive the node privkey (that corresponds to the node pubkey) and
     // other secret key material.
-    let seed = static_state.key_seed.clone();
-    let master_xprv =
-        crate::utils::xprv_from_seed(seed, network.into()).expect("valid master xprv");
+    let xkey: ExtendedKey = mnemonic
+        .clone()
+        .into_extended_key()
+        .expect("a valid key should have been provided");
+    let master_xprv = &xkey
+        .into_xprv(network)
+        .expect("should be possible to get an extended private key");
     let xprv: ExtendedPrivKey = master_xprv
         .ckd_priv(&Secp256k1_30::new(), ChildNumber::Hardened { index: 535 })
         .unwrap();
+    println!("start ldk with xprv: {}", xprv.to_string());
+    println!("working dir: {}", static_state.storage_dir_path.clone().to_string_lossy());
+    let ldk_seed: [u8; 32] = xprv.private_key.secret_bytes();
     let cur = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
     let keys_manager = Arc::new(KeysManager::new(
-        &seed[0..32].try_into().expect("Slice with incorrect length"),
+        &ldk_seed,
         cur.as_secs(),
         cur.subsec_nanos(),
         color_source.clone(),
     ));
+
+    let node_id = keys_manager.get_node_id(lightning::sign::Recipient::Node);
+    println!("node_id: {}", node_id.unwrap().to_string());
 
     // Initialize Persistence
     let fs_store = Arc::new(FilesystemStore::new(
@@ -1569,19 +1581,15 @@ pub(crate) async fn start_ldk(
 
     // Prepare the RGB wallet
     let bitcoin_network = network.into();
-    let xprv = crate::utils::xprv_from_seed(seed, network.into()).unwrap();
-    let xpub = ExtendedPubKey::from_priv(&Secp256k1::new(), &xprv);
-    let account_xpub = xpub;
+    let mnemonic_str = mnemonic.to_string();
+    let account_xpub = get_account_xpub(bitcoin_network, &mnemonic_str).unwrap();
+    println!("account_xpub: {}", account_xpub);
+    println!("account_pubkey: {}", account_xpub.public_key.to_string());
     let data_dir = static_state
         .storage_dir_path
         .clone()
         .to_string_lossy()
         .to_string();
-
-    let mnemonic_path = get_mnemonic_path(static_state.storage_dir_path.as_path());
-    let mnemonic =
-        Mnemonic::from_str(&fs::read_to_string(mnemonic_path).expect("valid mnemonic path"))
-            .expect("valid mnemonic");
 
     let mut rgb_wallet = tokio::task::spawn_blocking(move || {
         RgbLibWallet::new(WalletData {

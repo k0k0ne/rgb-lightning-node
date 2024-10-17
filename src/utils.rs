@@ -21,8 +21,8 @@ use lightning::{
 use lightning_persister::fs_store::FilesystemStore;
 use magic_crypt::{new_magic_crypt, MagicCryptTrait};
 
-use rgb_lib::bdk::keys::GeneratableKey;
-use rgb_lib::generate_keys;
+use rgb_lib::bdk::keys::{DerivableKey, ExtendedKey, GeneratableKey};
+use rgb_lib::{generate_keys, restore_keys};
 use rgb_lib::{bdk::keys::bip39::Mnemonic, BitcoinNetwork, ContractId};
 use std::{
     fmt::Write,
@@ -96,7 +96,6 @@ pub(crate) struct StaticState {
     pub(crate) proxy_endpoint: String,
     pub(crate) bitcoind_client: Arc<BitcoindClient>,
     pub(crate) max_media_upload_size_mb: u16,
-    pub key_seed: [u8; 64], // only for demo purposes
 }
 
 pub(crate) struct UnlockedAppState {
@@ -347,7 +346,10 @@ pub(crate) fn parse_peer_info(
     Ok((pubkey.unwrap(), peer_addr))
 }
 
-pub fn xprv_from_seed(seed: [u8; 64], network: BitcoinNetwork) -> Result<ExtendedPrivKey, bitcoin::bip32::Error> {
+pub fn xprv_from_seed(
+    seed: [u8; 64],
+    network: BitcoinNetwork,
+) -> Result<ExtendedPrivKey, bitcoin::bip32::Error> {
     let master_xprv = ExtendedPrivKey::new_master(network.into(), &seed)?;
     let account_derivation_path = vec![
         ChildNumber::from_hardened_idx(86 as u32).unwrap(),
@@ -362,16 +364,51 @@ pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, Ap
     let ldk_data_dir = args.storage_dir_path.join(LDK_DIR);
     let network: BitcoinNetwork = BitcoinNetwork::Regtest;
     let mnemonic_path = get_mnemonic_path(args.storage_dir_path.as_path());
+
+    let keys = if !mnemonic_path.exists() {
+        let keys = generate_keys(args.network.into());
+        fs::write(mnemonic_path, keys.mnemonic.clone()).expect("able to write");
+        keys
+    } else {
+        let mnemonic = fs::read_to_string(mnemonic_path).expect("able to read");
+        let keys = restore_keys(args.network.into(), mnemonic.clone()).unwrap();
+        keys
+    };
     
-    let keys = generate_keys(args.network.into());
-    fs::write(mnemonic_path, keys.mnemonic.clone()).expect("able to write");
     let mnemonic = Mnemonic::from_str(&keys.mnemonic).unwrap();
 
     println!("mnemonic: {}", mnemonic);
-    let key_seed: [u8; 64] = mnemonic.to_seed("");
-    let xprv = xprv_from_seed(key_seed, network).unwrap();
-    let color_source = ColorSourceWrapper::new(Mutex::new(ColorSourceImpl::new(ldk_data_dir.clone(), network, xprv)));
-    let logger = Arc::new(ConsoleLogger::new(ldk_data_dir.parent().unwrap().file_name().unwrap().to_str().unwrap().to_string()));
+    let xkey: ExtendedKey = mnemonic
+        .clone()
+        .into_extended_key()
+        .expect("a valid key should have been provided");
+    let master_xprv = &xkey
+        .into_xprv(network.into())
+        .expect("should be possible to get an extended private key");
+    let xprv: ExtendedPrivKey = master_xprv
+        .ckd_priv(&Secp256k1::new(), ChildNumber::Hardened { index: 535 })
+        .unwrap();
+    println!("start_daemon with xprv: {}", xprv.to_string());
+    let ldk_seed: [u8; 32] = xprv.private_key.secret_bytes();
+    let account_xpub = rgb_lib::utils::get_account_xpub(network, &mnemonic.to_string()).unwrap();
+    println!("account_xpub: {}", account_xpub);
+    println!("account_pubkey: {}", account_xpub.public_key.to_string());
+    let color_source = ColorSourceWrapper::new(Mutex::new(ColorSourceImpl::new(
+        ldk_data_dir.clone(),
+        network,
+        account_xpub,
+        xprv,
+    )));
+    let logger = Arc::new(ConsoleLogger::new(
+        ldk_data_dir
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string(),
+    ));
 
     // Initialize our bitcoind client.
     let bitcoind_client = match BitcoindClient::new(
@@ -435,7 +472,6 @@ pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, Ap
         proxy_endpoint: proxy_endpoint.to_string(),
         bitcoind_client,
         max_media_upload_size_mb: args.max_media_upload_size_mb,
-        key_seed,
     });
 
     Ok(Arc::new(AppState {
@@ -461,9 +497,9 @@ pub(crate) fn get_max_local_rgb_amount<'r>(
 ) -> u64 {
     let mut max_balance = 0;
     for chan_info in channels {
-        let (rgb_info, _) = get_rgb_channel_info_optional(&chan_info.channel_id, color_source, false);
-        if let Some(rgb_info) = rgb_info
-        {
+        let (rgb_info, _) =
+            get_rgb_channel_info_optional(&chan_info.channel_id, color_source, false);
+        if let Some(rgb_info) = rgb_info {
             if rgb_info.contract_id == contract_id && rgb_info.local_rgb_amount > max_balance {
                 max_balance = rgb_info.local_rgb_amount;
             }
