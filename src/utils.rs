@@ -37,13 +37,13 @@ use std::{
 use tokio::sync::{Mutex as TokioMutex, MutexGuard as TokioMutexGuard};
 use tokio_util::sync::CancellationToken;
 
+use crate::disk::ConsoleLogger;
 use crate::ldk::{ChannelIdsMap, Router};
 use crate::rgb::{get_rgb_channel_info_optional, RgbLibWalletWrapper};
 use crate::routes::{DEFAULT_FINAL_CLTV_EXPIRY_DELTA, HTLC_MIN_MSAT};
 use crate::{
     args::LdkUserInfo,
     bitcoind::BitcoindClient,
-    disk::FilesystemLogger,
     error::{APIError, AppError},
     ldk::{
         BumpTxEventHandler, ChannelManager, InboundPaymentInfoStorage, LdkBackgroundServices,
@@ -91,7 +91,7 @@ pub(crate) struct StaticState {
     pub(crate) network: Network,
     pub(crate) storage_dir_path: PathBuf,
     pub(crate) color_source: lightning::color_ext::ColorSourceWrapper,
-    pub(crate) logger: Arc<FilesystemLogger>,
+    pub(crate) logger: Arc<ConsoleLogger>,
     pub(crate) indexer_url: String,
     pub(crate) proxy_endpoint: String,
     pub(crate) bitcoind_client: Arc<BitcoindClient>,
@@ -371,7 +371,7 @@ pub(crate) async fn start_daemon(args: &LdkUserInfo) -> Result<Arc<AppState>, Ap
     let key_seed: [u8; 64] = mnemonic.to_seed("");
     let xprv = xprv_from_seed(key_seed, network).unwrap();
     let color_source = ColorSourceWrapper::new(Mutex::new(ColorSourceImpl::new(ldk_data_dir.clone(), network, xprv)));
-    let logger = Arc::new(FilesystemLogger::new(ldk_data_dir.clone()));
+    let logger = Arc::new(ConsoleLogger::new(ldk_data_dir.parent().unwrap().file_name().unwrap().to_str().unwrap().to_string()));
 
     // Initialize our bitcoind client.
     let bitcoind_client = match BitcoindClient::new(

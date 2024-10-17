@@ -16,13 +16,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::disk::FilesystemLogger;
+use crate::disk::ConsoleLogger;
 
 pub struct BitcoindClient {
     pub(crate) bitcoind_rpc_client: Arc<RpcClient>,
     fees: Arc<HashMap<ConfirmationTarget, AtomicU32>>,
     handle: tokio::runtime::Handle,
-    logger: Arc<FilesystemLogger>,
+    logger: Arc<ConsoleLogger>,
 }
 
 impl BlockSource for BitcoindClient {
@@ -117,7 +117,7 @@ impl BitcoindClient {
         rpc_user: String,
         rpc_password: String,
         handle: tokio::runtime::Handle,
-        logger: Arc<FilesystemLogger>,
+        logger: Arc<ConsoleLogger>,
     ) -> std::io::Result<Self> {
         let http_endpoint = HttpEndpoint::for_host(host.clone()).with_port(port);
         let rpc_credentials = general_purpose::STANDARD.encode(format!(

@@ -9,7 +9,7 @@ const TEST_DIR_BASE: &str = "tmp/swap_roundtrip_buy/";
 #[traced_test]
 async fn swap_roundtrip_buy() {
     initialize();
-
+    tr!();
     let test_dir_node1 = format!("{TEST_DIR_BASE}node1");
     let test_dir_node2 = format!("{TEST_DIR_BASE}node2");
     let test_dir_node3 = format!("{TEST_DIR_BASE}node3");

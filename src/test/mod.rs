@@ -1071,6 +1071,7 @@ async fn open_channel_with_custom_data(
                     mine_n_blocks(true, 6);
                     channel_id = Some(channel.channel_id.clone());
                     channel_funded = true;
+                    println!("channel funding TX confirmed txid {} channel id {}", channel.funding_txid.as_ref().unwrap(), channel.channel_id);
                     continue;
                 }
             }

@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::error::APIError;
 use crate::ldk::{
@@ -69,6 +69,43 @@ impl Logger for FilesystemLogger {
             .unwrap()
             .write_all(log.as_bytes())
             .unwrap();
+    }
+}
+
+pub(crate) struct ConsoleLogger {
+    prefix: String,
+    lock: Mutex<()>,
+}
+
+impl ConsoleLogger {
+    pub(crate) fn new(prefix: String) -> Self {
+        Self {
+            prefix,
+            lock: Mutex::new(()),
+        }
+    }
+}
+
+impl Logger for ConsoleLogger {
+    fn log(&self, record: Record) {
+        let _guard = self.lock.lock().unwrap();
+        let raw_log = record.args.to_string();
+
+        let log = format!(
+            "{} {} {:<5} [{}:{}] {}\n",
+            // Note that a "real" lightning node almost certainly does *not* want subsecond
+            // precision for message-receipt information as it makes log entries a target for
+            // deanonymization attacks. For testing, however, its quite useful.
+            self.prefix,
+            Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            record.level.to_string(),
+            record.module_path,
+            record.line,
+            raw_log
+        );
+
+        // Print to console
+        println!("{}", log);
     }
 }
 
@@ -145,7 +182,7 @@ pub(crate) fn read_channel_peer_data(
 pub(crate) fn read_network(
     path: &Path,
     network: Network,
-    logger: Arc<FilesystemLogger>,
+    logger: Arc<ConsoleLogger>,
 ) -> NetworkGraph {
     if let Ok(file) = File::open(path) {
         if let Ok(graph) = NetworkGraph::read(&mut BufReader::new(file), logger.clone()) {
@@ -200,8 +237,8 @@ pub(crate) fn read_swaps_info(path: &Path) -> SwapMap {
 pub(crate) fn read_scorer(
     path: &Path,
     graph: Arc<NetworkGraph>,
-    logger: Arc<FilesystemLogger>,
-) -> ProbabilisticScorer<Arc<NetworkGraph>, Arc<FilesystemLogger>> {
+    logger: Arc<ConsoleLogger>,
+) -> ProbabilisticScorer<Arc<NetworkGraph>, Arc<ConsoleLogger>> {
     let params = ProbabilisticScoringDecayParameters::default();
     if let Ok(file) = File::open(path) {
         let args = (params, Arc::clone(&graph), Arc::clone(&logger));

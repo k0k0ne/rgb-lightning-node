@@ -657,7 +657,7 @@ pub(crate) struct NodeInfoResponse {
     pub(crate) channel_asset_max_amount: u64,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct OpenChannelRequest {
     pub(crate) peer_pubkey_and_opt_addr: String,
     pub(crate) capacity_sat: u64,
@@ -2422,6 +2422,7 @@ pub(crate) async fn open_channel(
             None
         };
         tr!();
+        println!("open_channel payload.asset_id {:?}, payload.asset_amount {:?}", payload.asset_id.clone(), payload.asset_amount.clone());
         let colored_info = match (payload.asset_id, payload.asset_amount) {
             (Some(_), Some(amt)) if amt < OPENCHANNEL_MIN_RGB_AMT => {
                 return Err(APIError::InvalidAmount(format!(
@@ -2528,6 +2529,7 @@ pub(crate) async fn open_channel(
 
             Some(RgbTransport::from_str(&state.static_state.proxy_endpoint).unwrap())
         } else {
+            println!("open_channel without colored_info");
             None
         };
 
